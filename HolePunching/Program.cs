@@ -60,7 +60,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
   // Session lifetime for registration with server, after these minutes the server will evict our registration
   // this will not impact active connections but will require re-registration for future connections
   private const int SESSION_LIFETIME_MINS = 10;
-  private const int TIMEOUT_SECS = 10;
+  private const int TIMEOUT_SECS = 5;
 
   // Non-static fields
   private readonly IConnectionMultiplexer _connectionMultiplexer;
@@ -256,7 +256,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         _logger?.LogDebug("HolePunching: Attempting hole punching synchronization with peer at {PeerEndPoint}", _peerEndPoint);
 
         byte[] readPeerCtrs = new byte[2];
-        byte[] peerCtrs = new byte[2]; // 0 cts at first
+        byte[] writePeerCtrs = new byte[2]; // 0 cts at first
 
         int maxAttempts = TIMEOUT_SECS * 4;
         EndPoint tempEndPoint = _peerEndPoint; // only need to do this so I can pass it by ref
@@ -264,10 +264,10 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         _udpSocket.ReceiveTimeout = 250;
         for (int i = 0; i < maxAttempts; i++)
         {
-          _logger?.LogDebug("Hole Punching Protocol Ack-Syn Ack State peerA: {}, peerB: {}", peerCtrs[0], peerCtrs[1]);
+          _logger?.LogDebug("Hole Punching Protocol Ack-Syn Ack State peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
 
           // send local view of ctrs
-          _udpSocket.SendTo(peerCtrs, SocketFlags.None, _peerEndPoint);
+          _udpSocket.SendTo(writePeerCtrs, SocketFlags.None, _peerEndPoint);
 
           // observe incoming ctr updates
           if (_udpSocket.Poll(250_000, SelectMode.SelectRead)) // microseconds - 250ms between sends
@@ -278,21 +278,23 @@ internal class HolePunchingStateMachine : IAsyncDisposable
               if (_isSelfA)
               {
                 // put whatever view peer 1 has of peer 0's ctr in peerCtrs[0]
-                peerCtrs[0] = readPeerCtrs[0];
+                writePeerCtrs[0] = readPeerCtrs[0];
                 // Tell peer 1 that peer 0 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[1]
-                peerCtrs[1] = 1;
+                writePeerCtrs[1] = 1;
               }
               else
               {
                 // Tell peer 0 that peer 1 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[0]
-                peerCtrs[0] = 1;
+                writePeerCtrs[0] = 1;
                 // put whatever view peer 0 has of peer 1's ctr in peerCtrs[1]
-                peerCtrs[1] = readPeerCtrs[1];
+                writePeerCtrs[1] = readPeerCtrs[1];
               }
             }
 
             // Both reads indicate that both peers have seen each other at least once
-            if (readPeerCtrs[0] == 1 && readPeerCtrs[1] == 1 && peerCtrs[0] == 1 && peerCtrs[1] == 1)
+            // we compare all to 1 since we are just setting to 1 to indicate receipt of packet
+            // and reads and local state must be in sync according to the protocol
+            if (readPeerCtrs[0] == 1 && readPeerCtrs[1] == 1 && writePeerCtrs[0] == 1 && writePeerCtrs[1] == 1)
             {
               connected = true;
               break;
