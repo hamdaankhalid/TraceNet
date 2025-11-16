@@ -137,8 +137,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
     }
     while (nextState != HolePunchingState.EstablishedConnection && nextState != HolePunchingState.Initial);
 
-    // Connection established or failed
-    return CurrentState != HolePunchingState.EstablishedConnection;
+    return CurrentState == HolePunchingState.EstablishedConnection;
   }
 
   public async Task CloseAsync()
