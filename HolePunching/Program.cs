@@ -151,7 +151,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
 
     HolePunchingState currentState = CurrentState;
     await Next(); // Move to Closed state and cleanup
-    _logger?.LogDebug("HolePunching State Transition: {CurrentState} => state {NextState}, retry count {RegistrationRetryCount}, send punch retry count {SendPunchRetryCount}", 
+    _logger?.LogDebug("HolePunching State Transition: {CurrentState} => state {NextState}, retry count {RegistrationRetryCount}, send punch retry count {SendPunchRetryCount}",
       currentState, CurrentState, _registrationRetryCount, _sendPunchRetryCount);
   }
 
@@ -275,6 +275,9 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           _sendPunchRetryCount++;
           // Peer may not have registered yet
           // retry sending punch packet by moving one level back on state where we will reget Peer's info and resend punch packet incase the first was not received
+          _peerEndPoint = null!; // reset peer endpoint to force re-creation
+          _peerIp = null;
+          _peerPort = 0;
           CurrentState = HolePunchingState.RegisteredWithServer;
           _logger?.LogDebug("HolePunching: Did not receive response from peer, retrying...");
           break;
@@ -285,7 +288,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         for (int i = 0; i < maxAttempts; i++)
         {
           _udpSocket.SendTo(ACK_PACKET, SocketFlags.None, _peerEndPoint); // start sending acks back to peer, and keep sending acks till user starts sending acks back to us
-          // Poll to see if data is available (increased poll time to 250ms for better timing)
+                                                                          // Poll to see if data is available (increased poll time to 250ms for better timing)
           if (_udpSocket.Poll(250_000, SelectMode.SelectRead)) // microseconds - 250ms between sends
           {
             receiveResult = _udpSocket.ReceiveFrom(_internalBuffer, SocketFlags.None, ref tempEndPoint);
@@ -303,6 +306,9 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           _sendPunchRetryCount++;
           // Peer may not have registered yet
           // retry sending punch packet by moving one level back on state where we will reget Peer's info and resend punch packet incase the first was not received
+          _peerEndPoint = null!; // reset peer endpoint to force re-creation
+          _peerIp = null;
+          _peerPort = 0;
           CurrentState = HolePunchingState.RegisteredWithServer;
           _logger?.LogDebug("HolePunching: Did not receive ACK sync from peer, retrying...");
           break;
@@ -382,7 +388,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           // Best effort - continue with disposal even if close fails
         }
       }
-      
+
       // Dispose any remaining resources
       _udpSocket?.Dispose();
       await _connectionMultiplexer.CloseAsync();
