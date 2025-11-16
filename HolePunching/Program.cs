@@ -105,7 +105,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
     ArgumentOutOfRangeException.ThrowIfNegative(maxRetryCount);
 
     ConfigurationOptions options = ConfigurationOptions.Parse(registrationServerAddr);
-    options.Password = options.Password; // Preserve password from connection string if provided
+
     options.ConnectRetry = maxRetryCount;
     options.ConnectTimeout = 5000; // 5 seconds
     options.SyncTimeout = 5000; // 5 seconds
@@ -396,7 +396,8 @@ static class MinimalStunClient
       string host = parts[0];
       int port = int.Parse(parts[1]);
 
-      IPEndPoint serverEndPoint = new IPEndPoint(Dns.GetHostAddresses(host)[0], port);
+      IPAddress ipAddress = Dns.GetHostAddresses(host).First((x) => x.AddressFamily == AddressFamily.InterNetwork);
+      IPEndPoint serverEndPoint = new IPEndPoint(ipAddress, port);
 
       // Build and send STUN binding request
       byte[] request = new byte[20];
