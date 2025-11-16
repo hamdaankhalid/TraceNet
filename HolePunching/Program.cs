@@ -294,6 +294,8 @@ internal class HolePunchingStateMachine : IAsyncDisposable
             // Both reads indicate that both peers have seen each other at least once
             // we compare all to 1 since we are just setting to 1 to indicate receipt of packet
             // and reads and local state must be in sync according to the protocol
+          
+            // HK TODO: How is it possible that currently one peer can proceed without the other also seeing both?
             if (readPeerCtrs[0] == 1 && readPeerCtrs[1] == 1 && writePeerCtrs[0] == 1 && writePeerCtrs[1] == 1)
             {
               connected = true;
