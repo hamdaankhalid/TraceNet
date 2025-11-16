@@ -64,7 +64,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
   private const int SESSION_LIFETIME_MINS = 10;
   private const int TIMEOUT_SECS = 10;
 
-  // Non-static RO fields
+  // Non-static fields
   private readonly IConnectionMultiplexer _connectionMultiplexer;
   private readonly string _selfId;
   private readonly byte[] _internalBuffer = new byte[1024];
@@ -105,6 +105,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
     ArgumentOutOfRangeException.ThrowIfNegative(maxRetryCount);
 
     ConfigurationOptions options = ConfigurationOptions.Parse(registrationServerAddr);
+    options.Password = options.Password; // Preserve password from connection string if provided
     options.ConnectRetry = maxRetryCount;
     options.ConnectTimeout = 5000; // 5 seconds
     options.SyncTimeout = 5000; // 5 seconds
