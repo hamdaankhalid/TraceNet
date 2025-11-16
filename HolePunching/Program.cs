@@ -277,10 +277,10 @@ internal class HolePunchingStateMachine : IAsyncDisposable
             {
               if (_isSelfA)
               {
-                // Tell peer 1 that peer 0 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[1]
-                peerCtrs[1] = 1;
                 // put whatever view peer 1 has of peer 0's ctr in peerCtrs[0]
                 peerCtrs[0] = readPeerCtrs[0];
+                // Tell peer 1 that peer 0 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[1]
+                peerCtrs[1] = 1;
               }
               else
               {
@@ -291,8 +291,8 @@ internal class HolePunchingStateMachine : IAsyncDisposable
               }
             }
 
-            // Now till they both have seen each other once this will keep trying to reconnect
-            if (peerCtrs[0] == 1 && peerCtrs[1] == 1)
+            // Both reads indicate that both peers have seen each other at least once
+            if (readPeerCtrs[0] == 1 && readPeerCtrs[1] == 1)
             {
               connected = true;
               break;
@@ -561,7 +561,7 @@ internal class Program
 
     using CancellationTokenSource cts = new CancellationTokenSource();
 
-    string indentationOfReadMessages = new string('\t', 4);
+    string indentationOfReadMessages = new string('\t', 2);
     // one thread for receiving pings
     Task receivingTask = Task.Run(async () =>
     {

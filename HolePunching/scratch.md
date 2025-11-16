@@ -13,4 +13,6 @@ when peerA recvs they will increment peerB's ctr and now start sending this back
 
 Any time a peer sees their own counter has been incremented by the other peer
 let's say peerA ctr is incremented by peerB.
-This means that peerB recvd 
+This means that peerB recvd
+
+The problem is that if A or B resets then the other one's A and B view does not change..
