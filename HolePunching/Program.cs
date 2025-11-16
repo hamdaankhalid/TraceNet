@@ -76,7 +76,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
   private IPAddress? _peerIp;
   private string? _peerId;
   private int _peerPort;
-  private IPEndPoint? _peerEndPoint;
+  internal IPEndPoint? _peerEndPoint;
   private Socket? _udpSocket;
 
   // IDisposable support
@@ -219,6 +219,8 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           break;
         }
 
+        // This problem can be solved with depending on probability and by adding a level of randomization to who becomes A and who becomes B
+        // The reliance on a central server is not a great thing here. Although the reliance is minimal and only for initial connection
         await ManageABAssignment();
 
         // peer we want to connect to has also registered, parse their info
@@ -495,7 +497,7 @@ public sealed class HOPPeer : IAsyncDisposable
   {
     lock (_socketLock)
     {
-      return _stateMachine.HolePunchedSocket.Send(data);
+      return _stateMachine.HolePunchedSocket.SendTo(data, SocketFlags.None, _stateMachine._peerEndPoint!);
     }
   }
 
@@ -503,11 +505,11 @@ public sealed class HOPPeer : IAsyncDisposable
   {
     lock (_socketLock)
     {
-      if (_stateMachine.HolePunchedSocket.Poll(receiveTimeoutMs * 1_000, SelectMode.SelectRead) == false)
-      {
-        return 0; // timeout
-      }
-      return _stateMachine.HolePunchedSocket.Receive(buffer);
+      if (!_stateMachine.HolePunchedSocket.Poll(receiveTimeoutMs * 1_000, SelectMode.SelectRead))
+        return 0;
+    
+      EndPoint tempEndPoint = _stateMachine._peerEndPoint!; 
+      return _stateMachine.HolePunchedSocket.ReceiveFrom(buffer, SocketFlags.None, ref tempEndPoint);
     }
   }
 
