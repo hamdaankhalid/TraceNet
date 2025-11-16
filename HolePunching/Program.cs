@@ -70,6 +70,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
   private readonly ILogger? _logger;
 
   // State - Mutable fields 
+  private bool _isSelfA;
   private int _registrationRetryCount;
   private int _sendPunchRetryCount;
   private IPAddress? _peerIp;
@@ -218,6 +219,8 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           break;
         }
 
+        await ManageABAssignment();
+
         // peer we want to connect to has also registered, parse their info
         _registrationRetryCount = 0;
         string[] peerParts = peerInfo.Split(':');
@@ -243,8 +246,9 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           break;
         }
 
-        // CORE LOGIC OF HOLE PUNCHING
-        _logger?.LogDebug("HolePunching: Sending punch packet to peer");
+        // Hole punching Core Synchronization Logic:
+
+        _logger?.LogDebug("HolePunching: Attempting hole punching synchronization with peer at {PeerEndPoint}", _peerEndPoint);
 
         byte[] readPeerCtrs = new byte[2];
         byte[] peerCtrs = new byte[2]; // 0 cts at first
@@ -255,6 +259,8 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         _udpSocket.ReceiveTimeout = 250;
         for (int i = 0; i < maxAttempts; i++)
         {
+          _logger?.LogDebug("Hole Punching Protocol Ack-Syn Ack State peerA: {}, peerB: {}", peerCtrs[0], peerCtrs[1]);
+
           // send local view of ctrs
           _udpSocket.SendTo(peerCtrs, SocketFlags.None, _peerEndPoint);
 
@@ -264,13 +270,23 @@ internal class HolePunchingStateMachine : IAsyncDisposable
             int receiveResult = _udpSocket.ReceiveFrom(readPeerCtrs, SocketFlags.None, ref tempEndPoint);
             if (receiveResult > 0)
             {
-              // Tell peer 1 that peer 0 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[1]
-              peerCtrs[1] = 1;
-              // put whatever view peer 1 has of peer 0's ctr in peerCtrs[0]
-              peerCtrs[0] = readPeerCtrs[0];
-              // Now till they both have seen each other once this will keep trying to reconnect
+              if (_isSelfA)
+              {
+                // Tell peer 1 that peer 0 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[1]
+                peerCtrs[1] = 1;
+                // put whatever view peer 1 has of peer 0's ctr in peerCtrs[0]
+                peerCtrs[0] = readPeerCtrs[0];
+              }
+              else
+              {
+                // Tell peer 0 that peer 1 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[0]
+                peerCtrs[0] = 1;
+                // put whatever view peer 0 has of peer 1's ctr in peerCtrs[1]
+                peerCtrs[1] = readPeerCtrs[1];
+              }
             }
 
+            // Now till they both have seen each other once this will keep trying to reconnect
             if (peerCtrs[0] == 1 && peerCtrs[1] == 1)
             {
               connected = true;
@@ -330,6 +346,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         _peerIp = null;
         _peerPort = 0;
         _peerEndPoint = null!;
+        _isSelfA = false;
 
         CurrentState = HolePunchingState.Initial;
         break;
@@ -342,6 +359,16 @@ internal class HolePunchingStateMachine : IAsyncDisposable
   {
     IDatabase db = _connectionMultiplexer.GetDatabase();
     return db.StringSetAsync(_selfId, $"{publicIp}:{externalPort}", expiry: TimeSpan.FromMinutes(SESSION_LIFETIME_MINS)); // Sessions are 10 minutes long...
+  }
+
+  private async Task ManageABAssignment()
+  {
+    // connection between self Identifider and peerIdentifier should at any given point only have one "A" and one "B" in the pair
+    IDatabase db = _connectionMultiplexer.GetDatabase();
+    string compositeKey = _selfId.CompareTo(_peerId!) < 0 ? $"{_selfId}:{_peerId}" : $"{_peerId}:{_selfId}"; // sorted lexicographically
+    // now if this key already exists tell me who was A and update expiration. If it does not exist make me A
+    string? result = await db.StringSetAndGetAsync("AB:" + compositeKey, _selfId, expiry: TimeSpan.FromMinutes(SESSION_LIFETIME_MINS), when: When.NotExists);
+    _isSelfA = result == null || result == _selfId;
   }
 
   private Task DeregisterFromServerAsync()
