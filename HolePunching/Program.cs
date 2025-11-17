@@ -273,7 +273,8 @@ internal class HolePunchingStateMachine : IAsyncDisposable
             break;
           }
 
-          _logger?.LogDebug("Hole Punching Protocol Ack-Syn Ack State peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
+          _logger?.LogDebug("Ack-Syn State WRITE BUF peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
+          _logger?.LogDebug("Ack-Syn State READ BUF peerA: {}, peerB: {}", readPeerCtrs[0], readPeerCtrs[1]);
 
           // send local view of ctrs
           _udpSocket.SendTo(writePeerCtrs, SocketFlags.None, _peerEndPoint);
