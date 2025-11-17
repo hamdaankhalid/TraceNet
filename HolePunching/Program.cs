@@ -30,6 +30,195 @@ NAT thinks both peers are "replying" to outbound connections.
 and thus without any listening sockets you have peer to peer communication.
 */
 
+
+# region AckSyn State Machine
+// State machine to manage the SYN, SYN-ACK, ACK handshake for hole punching over UDP. It is not exactly how TCP does it, but I just want it to work
+enum SynAckState : byte
+{
+  // No packets received yet
+  Initial = 0,
+  Syn,
+  SynAck,
+  Ack,
+  Established,
+}
+
+abstract class SynAckStateMachineBase
+{
+  // borrowed socket from HolePunchingStateMachine. DO NOT DISPOSE
+  protected readonly Socket _udpSocket;
+  protected EndPoint _peerEndPoint;
+
+  protected readonly byte[] _internalRecvBuffer = new byte[32];
+
+  protected SynAckState _currentState = SynAckState.Initial;
+  public SynAckState CurrentState => _currentState;
+
+  public SynAckStateMachineBase(Socket udpSocket, EndPoint peerEndPoint)
+  {
+    _udpSocket = udpSocket;
+    _peerEndPoint = peerEndPoint;
+  }
+
+  public abstract void Next();
+}
+
+class SynAckStateMachineInitiator : SynAckStateMachineBase
+{
+  public SynAckStateMachineInitiator(Socket udpSocket, EndPoint peerEndPoint) : base(udpSocket, peerEndPoint) {}
+
+  public override void Next()
+  {
+    switch (_currentState)
+    {
+      case SynAckState.Initial:
+        // Send SYN packets till we get SYN-ACK from other side
+        _udpSocket.SendTo(new byte[] { (byte)SynAckState.Syn }, SocketFlags.None, _peerEndPoint);
+        _currentState = SynAckState.Syn;
+        break;
+      case SynAckState.Syn:
+        // Wait for SYN-ACK packet
+        if (!_udpSocket.Poll(250_000, SelectMode.SelectRead))
+        {
+          // send SYN packet
+          _currentState = SynAckState.Initial; // resend SYN packets
+          break;
+        }
+
+        int read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint); // read packet  
+        if (read > 0)
+        {
+          // check if packet recved is SYN-ACK based on byte pattern in enum
+          SynAckState state = (SynAckState)_internalRecvBuffer[0];
+          switch (state)
+          {
+            case SynAckState.SynAck:
+              // Received SYN-ACK, move to next state
+              break;
+            case SynAckState.Syn:
+              throw new InvalidOperationException("Protocol AB assignment invariant violation: Received unexpected SYN packet while waiting for SYN-ACK.");
+            default:
+              // Unexpected packet, ignore and stay in current state
+              throw new InvalidOperationException($"Protocol invariant violation: Received unexpected packet while waiting for SYN-ACK. {state}");
+          }
+        }
+        _currentState = SynAckState.SynAck;
+        break;
+      case SynAckState.SynAck:
+        // Send ACK packet
+        _udpSocket.SendTo(new byte[] { (byte)SynAckState.Ack }, SocketFlags.None, _peerEndPoint);
+        _currentState = SynAckState.Ack;
+        break;
+      case SynAckState.Ack:
+        // Connection established, wait for any earlier packets to ensure ACK was received (1 second timeout)
+        read = _udpSocket.Poll(1_000_000, SelectMode.SelectRead) ? _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint) : 0;
+        if (read > 0)
+        {
+          _currentState = SynAckState.SynAck; // revert back to SynAck state if we recieve any earlier packets to make sure sender recieves our ACK
+          break;
+        }
+
+        _currentState = SynAckState.Established;
+        break;
+      case SynAckState.Established:
+        // connection better have been freaking established now!
+        break;
+    }
+  }
+}
+
+class SynAckStateMachineResponder : SynAckStateMachineBase
+{
+  public SynAckStateMachineResponder(Socket udpSocket, EndPoint peerEndPoint) : base(udpSocket, peerEndPoint) { }
+
+  public override void Next()
+  {
+    int read;
+    switch (_currentState)
+    {
+      case SynAckState.Initial:
+        // Wait for SYN packet
+        if (_udpSocket.Poll(250_000, SelectMode.SelectRead))
+        {
+          read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint); // read packet  
+          if (read > 0)
+          {
+            // check if packet recved is SYN based on byte pattern in enum
+            SynAckState state = (SynAckState)_internalRecvBuffer[0];
+            switch (state)
+            {
+              case SynAckState.Syn:
+                // Received SYN, move to next state
+                break;
+              case SynAckState.SynAck:
+              case SynAckState.Ack:
+                throw new InvalidOperationException("Protocol BA assignment invariant violation: Received unexpected packet while waiting for SYN.");
+              default:
+                // Unexpected packet, ignore and stay in current state
+                throw new InvalidOperationException($"Protocol invariant violation: Received unexpected packet while waiting for SYN. {state}");
+            }
+          }
+        }
+
+        _currentState = SynAckState.Syn;
+        break;
+      case SynAckState.Syn:
+        // Send SYN-ACK packet
+        _udpSocket.SendTo(new byte[] { (byte)SynAckState.SynAck }, SocketFlags.None, _peerEndPoint);
+        _currentState = SynAckState.SynAck;
+        break;
+      case SynAckState.SynAck:
+        // Wait for ACK packet
+        if (!_udpSocket.Poll(250_000, SelectMode.SelectRead))
+        {
+          // resend SYN-ACK packet
+          _currentState = SynAckState.Syn;
+          break;
+        }
+        read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint); // read packet  
+        if (read > 0)
+        {
+          // check if packet recved is ACK based on byte pattern in enum
+          SynAckState state = (SynAckState)_internalRecvBuffer[0];
+          // can be that the other side is resending SYN-ACK if they did not get our ACK so check if they are still sending syn-acks
+          switch (state)
+          {
+            case SynAckState.Ack:
+              // Received ACK, move to next state
+              _currentState = SynAckState.Ack;
+              break;
+            case SynAckState.Syn:
+              throw new InvalidOperationException("Protocol BA assignment invariant violation: Received unexpected SYN packet while waiting for ACK.");
+            default:
+              // Unexpected packet, ignore and stay in current state
+              throw new InvalidOperationException($"Protocol invariant violation: Received unexpected packet while waiting for ACK. {state}");
+          }
+        }
+
+        break;
+      case SynAckState.Ack:
+        // Connection established
+        // if in the next second we recieve any earlier packets, revert back to SynAck state to ensure ACK was received
+        read = _udpSocket.Poll(1_000_000, SelectMode.SelectRead) ? _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint) : 0;
+        if (read > 0)
+        {
+          if (((SynAckState)_internalRecvBuffer[0]) != SynAckState.Ack) // old packet may have arrived do not proceed forward
+          {
+            throw new InvalidOperationException("Protocol invariant violation: Received unexpected packet after ACK.");
+          }
+        }
+
+        _currentState = SynAckState.Established;
+        break;
+      case SynAckState.Established:
+        // Already established, no further state
+        break;
+    }
+  }
+}
+
+#endregion
+
 enum HolePunchingState
 {
   // move to RegisteredWithServer by contacting STUN server and registering with registration server
@@ -216,13 +405,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           break;
         }
 
-        // This problem can be solved with depending on probability and by adding a level of randomization to who becomes A and who becomes B
-        // The reliance on a central server is not a great thing here. Although the reliance is minimal and only for initial connection
-
-        // what is the probability that 2 peers think they are both A or both B?
-        // 0.5 * 0.5 => 0.25, 25% chance of failure
-        // what is the chance that all 8 retries fail due to this? 0.25^10 VERY LOW chance of failure
-        await ManageABAssignment();
+        _isSelfA = String.CompareOrdinal(_selfId, _peerId) < 0; // Assign roles based on lexicographical order of IDs
 
         // peer we want to connect to has also registered, parse their info
         _registrationRetryCount = 0;
@@ -251,74 +434,34 @@ internal class HolePunchingStateMachine : IAsyncDisposable
 
         /* 
           Hole punching Core Synchronization Logic:
-          Initially they are both sending (0, 0) and (0, 0)
-          When a peer recieves a packet from the other peer it updates its view of the other peer's counter and increments its own counter to indicate receipt
-          the peer updates the view of the other peer's counter in the position corresponding to the other peer indicating that it has received a packet from them
-          (1, 0) is sent by peer A to indicate it has received a packet from peer B
-          (0, 1) is sent by peer B to indicate it has received a packet from peer A
+          A is the initiator and B is the responder
 
-          Once both have recieved (1, 1) we will wait for (2,2)
+          A will send syn packets to B
+          B upon recieval will send syn-ack packets to A
+          A upon recieval will send ack packets to B
+          B will transition to established upon recieving ack from A
+          A will transition to established upon sending ack to B
         */
 
         _logger?.LogDebug("HolePunching: Attempting hole punching synchronization with peer at {PeerEndPoint}", _peerEndPoint);
 
-        // 0 says no packets received yet, 1 says at least one packet received
-        byte[] readPeerCtrs = new byte[2];
-        byte[] writePeerCtrs = new byte[2];
-
-        int maxAttempts = TIMEOUT_SECS * 4;
-        EndPoint tempEndPoint = _peerEndPoint; // only need to do this so I can pass it by ref
         bool connected = false;
-        _udpSocket.ReceiveTimeout = 250;
-
-        byte randByte = (byte)Random.Shared.Next(1, 255); 
-        for (int i = 0; i < maxAttempts; i++)
+        try
         {
-          _logger?.LogDebug("Ack-Syn State WRITE BUF peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
-          _logger?.LogDebug("Ack-Syn State READ BUF peerA: {}, peerB: {}", readPeerCtrs[0], readPeerCtrs[1]);
-
-          if (readPeerCtrs[0] == randByte && readPeerCtrs[1] == randByte && writePeerCtrs[0] == randByte && writePeerCtrs[1] == randByte)
+          // Based on role assignemnt create appropriate state machine
+          SynAckStateMachineBase stateMachine = _isSelfA ? new SynAckStateMachineInitiator(_udpSocket, _peerEndPoint) : new SynAckStateMachineResponder(_udpSocket, _peerEndPoint);
+          SynAckState prevState = stateMachine.CurrentState;
+          for (; stateMachine.CurrentState != SynAckState.Established;)
           {
-            connected = true;
-            break;
+            stateMachine.Next();
+            _logger?.LogDebug("HolePunching: Initiator State Machine Transition: {PrevState} => {CurrentState}", prevState, stateMachine.CurrentState);
+            prevState = stateMachine.CurrentState;
           }
-
-          // Array.Fill(readPeerCtrs, (byte)0);
-
-          // send local view of ctrs
-          _udpSocket.SendTo(writePeerCtrs, SocketFlags.None, _peerEndPoint);
-
-          // observe incoming ctr updates
-          if (_udpSocket.Poll(250_000, SelectMode.SelectRead)) // microseconds - 250ms between sends
-          {
-            int receiveResult = _udpSocket.ReceiveFrom(readPeerCtrs, SocketFlags.None, ref tempEndPoint);
-            if (receiveResult > 0)
-            {
-              // check if our randbyte is in circulation or theirs
-              bool isOurRandByteUsed = _isSelfA ? readPeerCtrs[1] == randByte : readPeerCtrs[0] == randByte;
-              byte randByteRcvd = _isSelfA ? readPeerCtrs[1] : readPeerCtrs[0];
-
-              if (!isOurRandByteUsed && randByteRcvd != 0)
-              {
-                _logger?.LogDebug("HolePunching: Updated randByte to {RandByte} based on peer response", randByte);
-              }
-
-              if (_isSelfA)
-              {
-                // Tell peer 0 that peer 1 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[0]
-                writePeerCtrs[0] = randByte;
-                // put whatever view peer 0 has of peer 1's ctr in peerCtrs[1]
-                writePeerCtrs[1] = readPeerCtrs[1];
-              }
-              else
-              {
-                // put whatever view peer 1 has of peer 0's ctr in peerCtrs[0]
-                writePeerCtrs[0] = readPeerCtrs[0];
-                // Tell peer 1 that peer 0 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[1]
-                writePeerCtrs[1] = randByte;
-              }
-            }
-          }
+          connected = true;
+        }
+        catch (Exception ex)
+        {
+          _logger?.LogError(ex, "HolePunching: Exception during hole punching synchronization with peer at {PeerEndPoint}", _peerEndPoint);
         }
 
         if (!connected)
@@ -385,16 +528,6 @@ internal class HolePunchingStateMachine : IAsyncDisposable
   {
     IDatabase db = _connectionMultiplexer.GetDatabase();
     return db.StringSetAsync(_selfId, $"{publicIp}:{externalPort}", expiry: TimeSpan.FromMinutes(SESSION_LIFETIME_MINS)); // Sessions are 10 minutes long...
-  }
-
-  private async Task ManageABAssignment()
-  {
-    // connection between self Identifider and peerIdentifier should at any given point only have one "A" and one "B" in the pair
-    IDatabase db = _connectionMultiplexer.GetDatabase();
-    string compositeKey = _selfId.CompareTo(_peerId!) < 0 ? $"{_selfId}:{_peerId}" : $"{_peerId}:{_selfId}"; // sorted lexicographically
-    // now if this key already exists tell me who was A and update expiration. If it does not exist make me A
-    string? result = await db.StringSetAndGetAsync("AB:" + compositeKey, _selfId, expiry: TimeSpan.FromMinutes(SESSION_LIFETIME_MINS), when: When.NotExists);
-    _isSelfA = result == null || result == _selfId;
   }
 
   private Task DeregisterFromServerAsync()
