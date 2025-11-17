@@ -289,7 +289,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           _udpSocket.SendTo(writePeerCtrs, SocketFlags.None, _peerEndPoint);
 
           // observe incoming ctr updates
-          if (_udpSocket.Poll(50_000, SelectMode.SelectRead)) // microseconds - 250ms between sends
+          if (_udpSocket.Poll(250_000, SelectMode.SelectRead)) // microseconds - 250ms between sends
           {
             int receiveResult = _udpSocket.ReceiveFrom(readPeerCtrs, SocketFlags.None, ref tempEndPoint);
             if (receiveResult > 0)
@@ -299,6 +299,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
               if (!isOurRandByteUsed)
               {
                 randByte = _isSelfA ? readPeerCtrs[1] : readPeerCtrs[0];
+                _logger?.LogDebug("HolePunching: Updated randByte to {RandByte} based on peer response", randByte);
               }
 
               if (_isSelfA)
