@@ -261,7 +261,6 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         EndPoint tempEndPoint = _peerEndPoint; // only need to do this so I can pass it by ref
         bool connected = false;
         _udpSocket.ReceiveTimeout = 250;
-        int consecutives = 10;
         for (int i = 0; i < maxAttempts; i++)
         {
           _logger?.LogDebug("Hole Punching Protocol Ack-Syn Ack State peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
@@ -275,6 +274,15 @@ internal class HolePunchingStateMachine : IAsyncDisposable
             int receiveResult = _udpSocket.ReceiveFrom(readPeerCtrs, SocketFlags.None, ref tempEndPoint);
             if (receiveResult > 0)
             {
+              // Both reads indicate that both peers have seen each other at least once
+              // we compare all to 1 since we are just setting to 1 to indicate receipt of packet
+              // and reads and local state must be in sync according to the protocol
+              if (readPeerCtrs[0] == 1 && readPeerCtrs[1] == 1 && writePeerCtrs[0] == 1 && writePeerCtrs[1] == 1)
+              {
+                connected = true;
+                break;
+              }
+
               if (_isSelfA)
               {
                 // put whatever view peer 1 has of peer 0's ctr in peerCtrs[0]
@@ -289,22 +297,6 @@ internal class HolePunchingStateMachine : IAsyncDisposable
                 // put whatever view peer 0 has of peer 1's ctr in peerCtrs[1]
                 writePeerCtrs[1] = readPeerCtrs[1];
               }
-            }
-
-            // Both reads indicate that both peers have seen each other at least once
-            // we compare all to 1 since we are just setting to 1 to indicate receipt of packet
-            // and reads and local state must be in sync according to the protocol
-          
-            // HK TODO: BUG HERE.
-            // How is it possible that currently one peer can recieve both reads as 1, and has in it's write buffer also 1
-            if (readPeerCtrs[0] == 1 && readPeerCtrs[1] == 1 && writePeerCtrs[0] == 1 && writePeerCtrs[1] == 1 && consecutives-- <= 0)
-            {
-              connected = true;
-              break;
-            }
-            else
-            {
-              consecutives = 10; // reset consecutives counter if we did not reach the goal this iteration
             }
           }
         }
@@ -519,8 +511,8 @@ public sealed class HOPPeer : IAsyncDisposable
     {
       if (!_stateMachine.HolePunchedSocket.Poll(receiveTimeoutMs * 1_000, SelectMode.SelectRead))
         return 0;
-    
-      EndPoint tempEndPoint = _stateMachine._peerEndPoint!; 
+
+      EndPoint tempEndPoint = _stateMachine._peerEndPoint!;
       return _stateMachine.HolePunchedSocket.ReceiveFrom(buffer, SocketFlags.None, ref tempEndPoint);
     }
   }
