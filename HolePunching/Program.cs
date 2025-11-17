@@ -48,16 +48,25 @@ abstract class SynAckStateMachineBase
   // borrowed socket from HolePunchingStateMachine. DO NOT DISPOSE
   protected readonly Socket _udpSocket;
   protected EndPoint _peerEndPoint;
+  protected readonly ILogger? _logger;
 
   protected readonly byte[] _internalRecvBuffer = new byte[32];
 
   protected SynAckState _currentState = SynAckState.Initial;
   public SynAckState CurrentState => _currentState;
 
-  public SynAckStateMachineBase(Socket udpSocket, EndPoint peerEndPoint)
+  protected int _attemptCount = 0;
+  protected const int MAX_ATTEMPTS = 20; // ~5 seconds with 250ms polls
+
+  // Sequence numbers for detecting duplicates and old packets
+  protected byte _mySeq = 0;      // Sequence number I send
+  protected byte _lastPeerSeq = 0; // Last sequence number received from peer
+
+  public SynAckStateMachineBase(Socket udpSocket, EndPoint peerEndPoint, ILogger? logger)
   {
     _udpSocket = udpSocket;
     _peerEndPoint = peerEndPoint;
+    _logger = logger;
   }
 
   public abstract void Next();
@@ -65,63 +74,110 @@ abstract class SynAckStateMachineBase
 
 class SynAckStateMachineInitiator : SynAckStateMachineBase
 {
-  public SynAckStateMachineInitiator(Socket udpSocket, EndPoint peerEndPoint) : base(udpSocket, peerEndPoint) {}
+  public SynAckStateMachineInitiator(Socket udpSocket, EndPoint peerEndPoint, ILogger? logger) : base(udpSocket, peerEndPoint, logger) { }
 
   public override void Next()
   {
     switch (_currentState)
     {
       case SynAckState.Initial:
-        // Send SYN packets till we get SYN-ACK from other side
-        _udpSocket.SendTo(new byte[] { (byte)SynAckState.Syn }, SocketFlags.None, _peerEndPoint);
+        if (_attemptCount >= MAX_ATTEMPTS)
+        {
+          _logger?.LogError("SynAck Initiator: Exceeded max attempts ({MaxAttempts}) in Initial state", MAX_ATTEMPTS);
+          throw new TimeoutException($"Failed to establish connection after {MAX_ATTEMPTS} attempts");
+        }
+        
+        // Send SYN packets with sequence number
+        _mySeq++;
+        byte[] synPacket = new byte[] { (byte)SynAckState.Syn, _mySeq };
+        _udpSocket.SendTo(synPacket, SocketFlags.None, _peerEndPoint);
+        _logger?.LogDebug("SynAck Initiator: Sent SYN seq={Seq} (attempt {Attempt})", _mySeq, _attemptCount + 1);
+        _attemptCount++;
         _currentState = SynAckState.Syn;
         break;
       case SynAckState.Syn:
         // Wait for SYN-ACK packet
         if (!_udpSocket.Poll(250_000, SelectMode.SelectRead))
         {
-          // send SYN packet
+          // Timeout - resend SYN packet
+          _logger?.LogDebug("SynAck Initiator: Timeout waiting for SYN-ACK, retrying...");
           _currentState = SynAckState.Initial; // resend SYN packets
           break;
         }
 
-        int read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint); // read packet  
-        if (read > 0)
+        int read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint);
+        if (read >= 2) // Need at least state byte + sequence byte
         {
-          // check if packet recved is SYN-ACK based on byte pattern in enum
           SynAckState state = (SynAckState)_internalRecvBuffer[0];
+          byte receivedSeq = _internalRecvBuffer[1];
+          
+          // Check if this is an old/duplicate packet
+          if (receivedSeq <= _lastPeerSeq)
+          {
+            _logger?.LogDebug("SynAck Initiator: Ignoring old/duplicate packet (seq {Received} <= {Last})", receivedSeq, _lastPeerSeq);
+            return; // Stay in current state, ignore old packet
+          }
+          
           switch (state)
           {
             case SynAckState.SynAck:
               // Received SYN-ACK, move to next state
+              _lastPeerSeq = receivedSeq;
+              _logger?.LogDebug("SynAck Initiator: Received SYN-ACK seq={Seq}", receivedSeq);
+              _attemptCount = 0; // Reset counter for next phase
               break;
             case SynAckState.Syn:
-              throw new InvalidOperationException("Protocol AB assignment invariant violation: Received unexpected SYN packet while waiting for SYN-ACK.");
+              // Peer also thinks it's initiator - should not happen with proper role assignment
+              _logger?.LogWarning("SynAck Initiator: Received unexpected SYN seq={Seq} (role conflict), ignoring", receivedSeq);
+              return; // Stay in current state
             default:
-              // Unexpected packet, ignore and stay in current state
-              throw new InvalidOperationException($"Protocol invariant violation: Received unexpected packet while waiting for SYN-ACK. {state}");
+              // Unexpected packet, ignore
+              _logger?.LogWarning("SynAck Initiator: Received unexpected packet type {PacketType} seq={Seq}, ignoring", state, receivedSeq);
+              return; // Stay in current state
           }
         }
         _currentState = SynAckState.SynAck;
         break;
       case SynAckState.SynAck:
-        // Send ACK packet
-        _udpSocket.SendTo(new byte[] { (byte)SynAckState.Ack }, SocketFlags.None, _peerEndPoint);
+        // Send ACK packet with sequence number
+        _mySeq++;
+        byte[] ackPacket = new byte[] { (byte)SynAckState.Ack, _mySeq };
+        _udpSocket.SendTo(ackPacket, SocketFlags.None, _peerEndPoint);
+        _logger?.LogDebug("SynAck Initiator: Sent ACK seq={Seq}", _mySeq);
         _currentState = SynAckState.Ack;
         break;
       case SynAckState.Ack:
-        // Connection established, wait for any earlier packets to ensure ACK was received (1 second timeout)
+        // Connection established, wait briefly for any retransmitted packets
         read = _udpSocket.Poll(1_000_000, SelectMode.SelectRead) ? _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint) : 0;
-        if (read > 0)
+        if (read >= 2)
         {
-          _currentState = SynAckState.SynAck; // revert back to SynAck state if we recieve any earlier packets to make sure sender recieves our ACK
-          break;
+          SynAckState receivedState = (SynAckState)_internalRecvBuffer[0];
+          byte receivedSeq = _internalRecvBuffer[1];
+          
+          // Check if this is an old packet
+          if (receivedSeq <= _lastPeerSeq)
+          {
+            _logger?.LogDebug("SynAck Initiator: Ignoring old retransmission (seq {Received} <= {Last})", receivedSeq, _lastPeerSeq);
+            // Don't change state, don't resend - just ignore
+          }
+          else if (receivedState == SynAckState.SynAck)
+          {
+            // New SYN-ACK retransmission - peer didn't get our ACK, resend it
+            _udpSocket.SendTo(new byte[] { (byte)SynAckState.Ack, _mySeq }, SocketFlags.None, _peerEndPoint);
+            _logger?.LogDebug("SynAck Initiator: Received new SYN-ACK seq={Seq}, resent ACK", receivedSeq);
+            _lastPeerSeq = receivedSeq;
+          }
+          else
+          {
+            _logger?.LogDebug("SynAck Initiator: Received {PacketType} seq={Seq} after ACK sent, ignoring", receivedState, receivedSeq);
+          }
         }
 
+        _logger?.LogDebug("SynAck Initiator: Connection established");
         _currentState = SynAckState.Established;
         break;
       case SynAckState.Established:
-        // connection better have been freaking established now!
+        // Connection established
         break;
     }
   }
@@ -129,7 +185,7 @@ class SynAckStateMachineInitiator : SynAckStateMachineBase
 
 class SynAckStateMachineResponder : SynAckStateMachineBase
 {
-  public SynAckStateMachineResponder(Socket udpSocket, EndPoint peerEndPoint) : base(udpSocket, peerEndPoint) { }
+  public SynAckStateMachineResponder(Socket udpSocket, EndPoint peerEndPoint, ILogger? logger) : base(udpSocket, peerEndPoint, logger) { }
 
   public override void Next()
   {
@@ -137,77 +193,155 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
     switch (_currentState)
     {
       case SynAckState.Initial:
+        if (_attemptCount >= MAX_ATTEMPTS)
+        {
+          _logger?.LogError("SynAck Responder: Exceeded max attempts ({MaxAttempts}) waiting for SYN", MAX_ATTEMPTS);
+          throw new TimeoutException($"Failed to receive SYN after {MAX_ATTEMPTS} attempts");
+        }
+        
         // Wait for SYN packet
         if (_udpSocket.Poll(250_000, SelectMode.SelectRead))
         {
-          read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint); // read packet  
-          if (read > 0)
+          read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint);
+          if (read < 2) // Need at least state byte + sequence byte
           {
-            // check if packet recved is SYN based on byte pattern in enum
-            SynAckState state = (SynAckState)_internalRecvBuffer[0];
-            switch (state)
-            {
-              case SynAckState.Syn:
-                // Received SYN, move to next state
-                break;
-              case SynAckState.SynAck:
-              case SynAckState.Ack:
-                throw new InvalidOperationException("Protocol BA assignment invariant violation: Received unexpected packet while waiting for SYN.");
-              default:
-                // Unexpected packet, ignore and stay in current state
-                throw new InvalidOperationException($"Protocol invariant violation: Received unexpected packet while waiting for SYN. {state}");
-            }
+            return; // stay in current state
+          }
+
+          SynAckState state = (SynAckState)_internalRecvBuffer[0];
+          byte receivedSeq = _internalRecvBuffer[1];
+          
+          // Check if this is an old/duplicate packet
+          if (receivedSeq <= _lastPeerSeq)
+          {
+            _logger?.LogDebug("SynAck Responder: Ignoring old/duplicate packet (seq {Received} <= {Last})", receivedSeq, _lastPeerSeq);
+            return; // Stay in current state
+          }
+          
+          switch (state)
+          {
+            case SynAckState.Syn:
+              // Received SYN, move to next state
+              _lastPeerSeq = receivedSeq;
+              _logger?.LogDebug("SynAck Responder: Received SYN seq={Seq} (attempt {Attempt})", receivedSeq, _attemptCount + 1);
+              _currentState = SynAckState.Syn;
+              _attemptCount = 0; // Reset counter for next phase
+              break;
+            case SynAckState.SynAck:
+            case SynAckState.Ack:
+              // Peer may be retransmitting, ignore
+              _logger?.LogWarning("SynAck Responder: Received unexpected {PacketType} seq={Seq} while waiting for SYN, ignoring", state, receivedSeq);
+              return; // Stay in current state
+            default:
+              // Unexpected packet, ignore
+              _logger?.LogWarning("SynAck Responder: Received unknown packet type {PacketType} seq={Seq}, ignoring", state, receivedSeq);
+              return; // Stay in current state
           }
         }
+        else
+        {
+          _attemptCount++;
+        }
 
-        _currentState = SynAckState.Syn;
         break;
       case SynAckState.Syn:
-        // Send SYN-ACK packet
-        _udpSocket.SendTo(new byte[] { (byte)SynAckState.SynAck }, SocketFlags.None, _peerEndPoint);
+        // Send SYN-ACK packet with sequence number
+        _mySeq++;
+        byte[] synAckPacket = new byte[] { (byte)SynAckState.SynAck, _mySeq };
+        _udpSocket.SendTo(synAckPacket, SocketFlags.None, _peerEndPoint);
+        _logger?.LogDebug("SynAck Responder: Sent SYN-ACK seq={Seq}", _mySeq);
         _currentState = SynAckState.SynAck;
         break;
       case SynAckState.SynAck:
+        if (_attemptCount >= MAX_ATTEMPTS)
+        {
+          _logger?.LogError("SynAck Responder: Exceeded max attempts ({MaxAttempts}) waiting for ACK", MAX_ATTEMPTS);
+          throw new TimeoutException($"Failed to receive ACK after {MAX_ATTEMPTS} attempts");
+        }
+        
         // Wait for ACK packet
         if (!_udpSocket.Poll(250_000, SelectMode.SelectRead))
         {
-          // resend SYN-ACK packet
+          // Timeout - resend SYN-ACK packet
+          _logger?.LogDebug("SynAck Responder: Timeout waiting for ACK, retrying...");
+          _attemptCount++;
           _currentState = SynAckState.Syn;
           break;
         }
-        read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint); // read packet  
-        if (read > 0)
+        read = _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint);
+        if (read >= 2)
         {
-          // check if packet recved is ACK based on byte pattern in enum
           SynAckState state = (SynAckState)_internalRecvBuffer[0];
-          // can be that the other side is resending SYN-ACK if they did not get our ACK so check if they are still sending syn-acks
+          byte receivedSeq = _internalRecvBuffer[1];
+          
+          // Check if this is an old/duplicate packet
+          if (receivedSeq <= _lastPeerSeq)
+          {
+            _logger?.LogDebug("SynAck Responder: Ignoring old/duplicate packet (seq {Received} <= {Last})", receivedSeq, _lastPeerSeq);
+            return; // Stay in current state
+          }
+          
           switch (state)
           {
             case SynAckState.Ack:
               // Received ACK, move to next state
+              _lastPeerSeq = receivedSeq;
+              _logger?.LogDebug("SynAck Responder: Received ACK seq={Seq}", receivedSeq);
               _currentState = SynAckState.Ack;
+              _attemptCount = 0; // Reset counter
               break;
             case SynAckState.Syn:
-              throw new InvalidOperationException("Protocol BA assignment invariant violation: Received unexpected SYN packet while waiting for ACK.");
+              // Peer is retransmitting SYN - check if it's newer
+              if (receivedSeq > _lastPeerSeq)
+              {
+                _lastPeerSeq = receivedSeq;
+                _logger?.LogDebug("SynAck Responder: Received new SYN seq={Seq}, will resend SYN-ACK", receivedSeq);
+                _currentState = SynAckState.Syn;
+              }
+              else
+              {
+                _logger?.LogDebug("SynAck Responder: Ignoring old SYN retransmission");
+              }
+              break;
             default:
               // Unexpected packet, ignore and stay in current state
-              throw new InvalidOperationException($"Protocol invariant violation: Received unexpected packet while waiting for ACK. {state}");
+              _logger?.LogWarning("SynAck Responder: Received unexpected packet type {PacketType} seq={Seq} while waiting for ACK, ignoring", state, receivedSeq);
+              return; // Stay in current state
           }
         }
 
         break;
       case SynAckState.Ack:
         // Connection established
-        // if in the next second we recieve any earlier packets, revert back to SynAck state to ensure ACK was received
+        // Wait briefly for any retransmitted packets and respond appropriately
         read = _udpSocket.Poll(1_000_000, SelectMode.SelectRead) ? _udpSocket.ReceiveFrom(_internalRecvBuffer, SocketFlags.None, ref _peerEndPoint) : 0;
-        if (read > 0)
+        if (read >= 2)
         {
-          if (((SynAckState)_internalRecvBuffer[0]) != SynAckState.Ack) // old packet may have arrived do not proceed forward
+          SynAckState receivedState = (SynAckState)_internalRecvBuffer[0];
+          byte receivedSeq = _internalRecvBuffer[1];
+          
+          // Check if this is an old packet
+          if (receivedSeq <= _lastPeerSeq)
           {
-            throw new InvalidOperationException("Protocol invariant violation: Received unexpected packet after ACK.");
+            _logger?.LogDebug("SynAck Responder: Ignoring old retransmission (seq {Received} <= {Last})", receivedSeq, _lastPeerSeq);
+            // Don't change state, don't resend - just ignore
+          }
+          else if (receivedState == SynAckState.Syn)
+          {
+            // New SYN retransmission - peer still doesn't know we're connected, go back to Syn state
+            _lastPeerSeq = receivedSeq;
+            _logger?.LogDebug("SynAck Responder: Received new SYN seq={Seq}, going back to Syn state", receivedSeq);
+            _currentState = SynAckState.Syn;
+            return; // Don't transition to Established
+          }
+          else
+          {
+            // Other packet type
+            _logger?.LogDebug("SynAck Responder: Received {PacketType} seq={Seq} after ACK, ignoring", receivedState, receivedSeq);
           }
         }
 
+        _logger?.LogDebug("SynAck Responder: Connection established");
         _currentState = SynAckState.Established;
         break;
       case SynAckState.Established:
@@ -449,7 +583,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         try
         {
           // Based on role assignemnt create appropriate state machine
-          SynAckStateMachineBase stateMachine = _isSelfA ? new SynAckStateMachineInitiator(_udpSocket, _peerEndPoint) : new SynAckStateMachineResponder(_udpSocket, _peerEndPoint);
+          SynAckStateMachineBase stateMachine = _isSelfA ? new SynAckStateMachineInitiator(_udpSocket, _peerEndPoint, _logger) : new SynAckStateMachineResponder(_udpSocket, _peerEndPoint, _logger);
           SynAckState prevState = stateMachine.CurrentState;
           for (; stateMachine.CurrentState != SynAckState.Established;)
           {
