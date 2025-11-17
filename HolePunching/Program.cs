@@ -297,6 +297,9 @@ internal class HolePunchingStateMachine : IAsyncDisposable
                 // put whatever view peer 0 has of peer 1's ctr in peerCtrs[1]
                 writePeerCtrs[1] = readPeerCtrs[1];
               }
+
+              readPeerCtrs[0] = 0; // reset for next receive
+              readPeerCtrs[1] = 0; // reset for next receive
             }
           }
         }
