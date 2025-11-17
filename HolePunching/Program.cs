@@ -263,6 +263,9 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         for (int i = 0; i < maxAttempts; i++)
         {
 
+          _logger?.LogDebug("Ack-Syn State WRITE BUF peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
+          _logger?.LogDebug("Ack-Syn State READ BUF peerA: {}, peerB: {}", readPeerCtrs[0], readPeerCtrs[1]);
+
           // Both reads indicate that both peers have seen each other at least once
           // we compare all to 1 since we are just setting to 1 to indicate receipt of packet
           // and reads and local state must be in sync according to the protocol
@@ -272,8 +275,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
             break;
           }
 
-          _logger?.LogDebug("Ack-Syn State WRITE BUF peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
-          _logger?.LogDebug("Ack-Syn State READ BUF peerA: {}, peerB: {}", readPeerCtrs[0], readPeerCtrs[1]);
+          Array.Fill(readPeerCtrs, (byte)0);
 
           // send local view of ctrs
           _udpSocket.SendTo(writePeerCtrs, SocketFlags.None, _peerEndPoint);
