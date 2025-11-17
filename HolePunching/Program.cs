@@ -266,16 +266,18 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         byte[] readPeerCtrs = new byte[2];
         byte[] writePeerCtrs = new byte[2];
 
-        int maxAttempts = TIMEOUT_SECS * 4;
+        int maxAttempts = TIMEOUT_SECS * 40;
         EndPoint tempEndPoint = _peerEndPoint; // only need to do this so I can pass it by ref
         bool connected = false;
         _udpSocket.ReceiveTimeout = 250;
+
+        byte randByte = (byte)Random.Shared.Next(1, 255); 
         for (int i = 0; i < maxAttempts; i++)
         {
           _logger?.LogDebug("Ack-Syn State WRITE BUF peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
           _logger?.LogDebug("Ack-Syn State READ BUF peerA: {}, peerB: {}", readPeerCtrs[0], readPeerCtrs[1]);
 
-          if (readPeerCtrs[0] == 2 && readPeerCtrs[1] == 2 && writePeerCtrs[0] == 2 && writePeerCtrs[1] == 2)
+          if (readPeerCtrs[0] == randByte && readPeerCtrs[1] == randByte && writePeerCtrs[0] == randByte && writePeerCtrs[1] == randByte)
           {
             connected = true;
             break;
@@ -287,22 +289,29 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           _udpSocket.SendTo(writePeerCtrs, SocketFlags.None, _peerEndPoint);
 
           // observe incoming ctr updates
-          if (_udpSocket.Poll(250_000, SelectMode.SelectRead)) // microseconds - 250ms between sends
+          if (_udpSocket.Poll(50_000, SelectMode.SelectRead)) // microseconds - 250ms between sends
           {
             int receiveResult = _udpSocket.ReceiveFrom(readPeerCtrs, SocketFlags.None, ref tempEndPoint);
             if (receiveResult > 0)
             {
+              // check if our randbyte is in circulation or theirs
+              bool isOurRandByteUsed = _isSelfA ? readPeerCtrs[1] == randByte : readPeerCtrs[0] == randByte;
+              if (!isOurRandByteUsed)
+              {
+                randByte = _isSelfA ? readPeerCtrs[1] : readPeerCtrs[0];
+              }
+
               if (_isSelfA)
               {
                 // put whatever view peer 1 has of peer 0's ctr in peerCtrs[0]
                 writePeerCtrs[0] = readPeerCtrs[0];
                 // Tell peer 1 that peer 0 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[1]
-                writePeerCtrs[1] = readPeerCtrs[1] == 0 ? (byte)1 : (byte)2;
+                writePeerCtrs[1] = randByte;
               }
               else
               {
                 // Tell peer 0 that peer 1 has recvd the packet by setting to 1. This might worth using incrementing peerCtrs[0]
-                writePeerCtrs[0] = readPeerCtrs[0] == 0 ? (byte)1 : (byte)2;
+                writePeerCtrs[0] = randByte;
                 // put whatever view peer 0 has of peer 1's ctr in peerCtrs[1]
                 writePeerCtrs[1] = readPeerCtrs[1];
               }
