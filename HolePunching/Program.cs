@@ -172,8 +172,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         _udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
         // Make sure we are not behing a NAT that is symmetric otherwise hole punching will likely fail
-        bool isSymmetricNat = await MinimalStunClient.IsSymmetricNat(_udpSocket, new string[] { "stun1.l.google.com:19302", "stun2.l.google.com:19302" });
-        if (isSymmetricNat)
+        if (await MinimalStunClient.IsSymmetricNatAsync(_udpSocket, STUN_SERVERS))
         {
           _logger?.LogError("HolePunching: Symmetric NAT detected, hole punching will fail");
           CurrentState = HolePunchingState.Closed;
@@ -262,6 +261,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         EndPoint tempEndPoint = _peerEndPoint; // only need to do this so I can pass it by ref
         bool connected = false;
         _udpSocket.ReceiveTimeout = 250;
+        int consecutives = 10;
         for (int i = 0; i < maxAttempts; i++)
         {
           _logger?.LogDebug("Hole Punching Protocol Ack-Syn Ack State peerA: {}, peerB: {}", writePeerCtrs[0], writePeerCtrs[1]);
@@ -295,11 +295,16 @@ internal class HolePunchingStateMachine : IAsyncDisposable
             // we compare all to 1 since we are just setting to 1 to indicate receipt of packet
             // and reads and local state must be in sync according to the protocol
           
-            // HK TODO: How is it possible that currently one peer can proceed without the other also seeing both?
-            if (readPeerCtrs[0] == 1 && readPeerCtrs[1] == 1 && writePeerCtrs[0] == 1 && writePeerCtrs[1] == 1)
+            // HK TODO: BUG HERE.
+            // How is it possible that currently one peer can recieve both reads as 1, and has in it's write buffer also 1
+            if (readPeerCtrs[0] == 1 && readPeerCtrs[1] == 1 && writePeerCtrs[0] == 1 && writePeerCtrs[1] == 1 && consecutives-- <= 0)
             {
               connected = true;
               break;
+            }
+            else
+            {
+              consecutives = 10; // reset consecutives counter if we did not reach the goal this iteration
             }
           }
         }
@@ -418,7 +423,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
 // I don't need anything else so I'm not even parsing full messages, just give me the bytes I need damn it
 static class MinimalStunClient
 {
-  public static async Task<bool> IsSymmetricNat(Socket udpSocket, string[] stunServers)
+  public static async Task<bool> IsSymmetricNatAsync(Socket udpSocket, string[] stunServers)
   {
     int randomIdx = Random.Shared.Next(stunServers.Length);
     string stunServer1 = stunServers[randomIdx];
