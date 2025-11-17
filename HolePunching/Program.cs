@@ -87,7 +87,7 @@ class SynAckStateMachineInitiator : SynAckStateMachineBase
           _logger?.LogError("SynAck Initiator: Exceeded max attempts ({MaxAttempts}) in Initial state", MAX_ATTEMPTS);
           throw new TimeoutException($"Failed to establish connection after {MAX_ATTEMPTS} attempts");
         }
-        
+
         // Send SYN packets with sequence number
         _mySeq++;
         _internalSendBuffer[0] = (byte)SynAckState.Syn;
@@ -112,14 +112,14 @@ class SynAckStateMachineInitiator : SynAckStateMachineBase
         {
           SynAckState state = (SynAckState)_internalRecvBuffer[0];
           byte receivedSeq = _internalRecvBuffer[1];
-          
+
           // Check if this is an old/duplicate packet
           if (receivedSeq <= _lastPeerSeq)
           {
             _logger?.LogDebug("SynAck Initiator: Ignoring old/duplicate packet (seq {Received} <= {Last})", receivedSeq, _lastPeerSeq);
             return; // Stay in current state, ignore old packet
           }
-          
+
           switch (state)
           {
             case SynAckState.SynAck:
@@ -156,7 +156,7 @@ class SynAckStateMachineInitiator : SynAckStateMachineBase
         {
           SynAckState receivedState = (SynAckState)_internalRecvBuffer[0];
           byte receivedSeq = _internalRecvBuffer[1];
-          
+
           // Check if this is an old packet
           if (receivedSeq <= _lastPeerSeq)
           {
@@ -201,7 +201,7 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
           _logger?.LogError("SynAck Responder: Exceeded max attempts ({MaxAttempts}) waiting for SYN", MAX_ATTEMPTS);
           throw new TimeoutException($"Failed to receive SYN after {MAX_ATTEMPTS} attempts");
         }
-        
+
         // Wait for SYN packet
         if (_udpSocket.Poll(250_000, SelectMode.SelectRead))
         {
@@ -213,14 +213,14 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
 
           SynAckState state = (SynAckState)_internalRecvBuffer[0];
           byte receivedSeq = _internalRecvBuffer[1];
-          
+
           // Check if this is an old/duplicate packet
           if (receivedSeq <= _lastPeerSeq)
           {
             _logger?.LogDebug("SynAck Responder: Ignoring old/duplicate packet (seq {Received} <= {Last})", receivedSeq, _lastPeerSeq);
             return; // Stay in current state
           }
-          
+
           switch (state)
           {
             case SynAckState.Syn:
@@ -262,7 +262,7 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
           _logger?.LogError("SynAck Responder: Exceeded max attempts ({MaxAttempts}) waiting for ACK", MAX_ATTEMPTS);
           throw new TimeoutException($"Failed to receive ACK after {MAX_ATTEMPTS} attempts");
         }
-        
+
         // Wait for ACK packet
         if (!_udpSocket.Poll(250_000, SelectMode.SelectRead))
         {
@@ -277,14 +277,14 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
         {
           SynAckState state = (SynAckState)_internalRecvBuffer[0];
           byte receivedSeq = _internalRecvBuffer[1];
-          
+
           // Check if this is an old/duplicate packet
           if (receivedSeq <= _lastPeerSeq)
           {
             _logger?.LogDebug("SynAck Responder: Ignoring old/duplicate packet (seq {Received} <= {Last})", receivedSeq, _lastPeerSeq);
             return; // Stay in current state
           }
-          
+
           switch (state)
           {
             case SynAckState.Ack:
@@ -323,7 +323,7 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
         {
           SynAckState receivedState = (SynAckState)_internalRecvBuffer[0];
           byte receivedSeq = _internalRecvBuffer[1];
-          
+
           // Check if this is an old packet
           if (receivedSeq <= _lastPeerSeq)
           {
@@ -592,6 +592,12 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           for (; stateMachine.CurrentState != SynAckState.Established;)
           {
             stateMachine.Next();
+            // no state change. this could be due to timeouts waiting for packets etc
+            if (stateMachine.CurrentState == prevState)
+            {
+              continue;
+            }
+
             _logger?.LogDebug("HolePunching: Initiator State Machine Transition: {PrevState} => {CurrentState}", prevState, stateMachine.CurrentState);
             prevState = stateMachine.CurrentState;
           }
