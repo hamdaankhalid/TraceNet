@@ -226,6 +226,9 @@ class HandshakeStateMachine
       byte sessionId = _internalRecvBuffer[i + 1];
       byte seqNum = _internalRecvBuffer[i + 2];
 
+      _logger?.LogDebug("HandshakeStateMachine: Received UDP bullet packet - Type: {PacketType}, SessionId: {SessionId}, SeqNum: {SeqNum}",
+        packetType, sessionId, seqNum);
+
       if (packetType != 1 || seqNum <= _peerSeq)
       {
         continue;
