@@ -185,6 +185,7 @@ class HandshakeStateMachine
     if (!_udpSocket.Poll(250_000, SelectMode.SelectRead))
     {
       // timed out, did not receive any bullets
+      _logger?.LogDebug("HandshakeStateMachine: No UDP bullets received from peer within timeout");
       return false;
     }
 
@@ -193,12 +194,14 @@ class HandshakeStateMachine
     if (receivedBytes % 3 != 0)
     {
       // invalid packet
+      _logger?.LogError("HandshakeStateMachine: Invalid UDP bullet packet received with size not multiple of 3");
       return false;
     }
 
     if (receivedBytes < 3)
     {
       // invalid packet
+      _logger?.LogError("HandshakeStateMachine: Invalid UDP bullet packet received with size less than 3 bytes");
       return false;
     }
 
