@@ -275,14 +275,6 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
 
         bool _ = ReadBuffer(SynAckState.None, out SynAckState recvdState2, 1_000); // always returns false here
 
-        if (recvdState2 == SynAckState.SynAck)
-        {
-          // New SYN-ACK retransmission - peer didn't get our ACK
-          _logger?.LogDebug("SynAck Initiator: Received retransmitted SYN-ACK seq={Seq}, New higher sequence means we need to reset the initiator", _lastPeerSeq); 
-          _currentState = SynAckState.SynAck;
-          return;
-        }
-
         if (recvdState2 != SynAckState.None)
         {
           _currentState = SynAckState.Syn;
