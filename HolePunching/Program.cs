@@ -113,10 +113,11 @@ abstract class SynAckStateMachineBase
     for (int i = 0; i < readBytes; i += 2)
     {
       byte seq = _internalRecvBuffer[i + 1];
-      if (seq > _lastPeerSeq)
+      if (seq > _lastPeerSeq && recvdState != SynAckState.Bullet)
       {
         recvdState = (SynAckState)_internalRecvBuffer[i];
       }
+
       Debug.Assert(recvdState != SynAckState.Initial, "Nobody sends Initial state packet on the buffer!");
       if (recvdState == SynAckState.Bullet || seq <= _lastPeerSeq || recvdState != expectedState)
       {
@@ -273,7 +274,7 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
         // Connection established
         // ONLY Transition to Established state on no further packets received within timeout        
 
-        bool _ = ReadBuffer(SynAckState.None, out SynAckState recvdState2, 1_000); // always returns false here
+        bool _ = ReadBuffer(SynAckState.None, out SynAckState recvdState2, 5_000); // always returns false here
 
         if (recvdState2 != SynAckState.None)
         {
