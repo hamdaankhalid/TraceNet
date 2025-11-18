@@ -102,6 +102,8 @@ class HandshakeStateMachine
     _logger?.LogDebug("HandshakeStateMachine: Publishing {isA} view to peer {mySessionId} {peerSessionId}", _isA ? "A" : "B", _mySessionId, _peerSessionId);
 
     PublishViewToPeer();
+    
+    bool readPeerView = TryReadPeerView(out int peerSessionId, out int ourSessionIdViewedByPeer);
 
     switch (_currentState)
     {
@@ -128,7 +130,7 @@ class HandshakeStateMachine
         {
           // if the recvd bullets are from the same session who has posted state, that same session must be live right now, and if the live session can confirm that it sees us!
           // we can establish that a bidirectionally viewable UDP channel has been established.
-          if (gotPeerBullets && TryReadPeerView(out int peerSessionId, out int ourSessionIdViewedByPeer))
+          if (gotPeerBullets && readPeerView)
           {
             _logger?.LogDebug("HandshakeStateMachine: Read peer view from state store PeerSessionId: {PeerSessionId}, {PeersViewOfOurSessionId}",
               peerSessionId, ourSessionIdViewedByPeer);
