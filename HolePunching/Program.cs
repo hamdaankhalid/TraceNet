@@ -82,7 +82,7 @@ abstract class SynAckStateMachineBase
   {
     _internalSendBuffer[0] = (byte)SynAckState.Bullet;
     _internalSendBuffer[1] = 0; // the sequence number doesn't matter in Bullet packets
-    //for (int i = 0; i < ; i++)
+    for (int i = 0; i < 10; i++) // 10 bullets per state?
     {
       _udpSocket.SendTo(_internalSendBuffer, SocketFlags.None, _peerEndPoint);
     }
