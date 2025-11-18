@@ -137,8 +137,6 @@ class HandshakeStateMachine
         // nothing to do here, connection is established
         break;
     }
-
-    Thread.Sleep(Random.Shared.Next(50, 100)); // small delay to avoid busy looping
   }
 
   // send reliable state delivery to peer over common infra
@@ -451,6 +449,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           while (stateMachine.CurrentState != ProtocolState.ESTABLISHED_CONNECTION)
           {
             stateMachine.Next();
+            await Task.Delay(Random.Shared.Next(20, 80)); // small delay to avoid tight loop
           }
           connected = true;
         }
