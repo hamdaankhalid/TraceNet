@@ -145,7 +145,10 @@ class HandshakeStateMachine
     // what is my session id, what is the session Id I saw of peers
     short view = (short)((_mySessionId << 8) | _peerSessionId); // my sessionId sits high, peer sessionId low
     IDatabase db = _connectionMultiplexer.GetDatabase();
-    db.Execute("SET", _mySessionStateStoreKey, view);
+    // Redis doesn't have a native short type - it stores values as strings or byte arrays
+    // StackExchange.Redis can serialize ints, longs, strings, etc. but not short directly
+    // We need to cast to int or use byte array serialization
+    db.Execute("SET", _mySessionStateStoreKey, (int)view);
   }
 
   private bool TryReadPeerView(out short peerSessionId, out byte ourSessionIdViewedByPeer)
