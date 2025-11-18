@@ -96,6 +96,8 @@ class HandshakeStateMachine
     ShootNatPenetrationBullets(3); // 3 bullets per state call to keep NAT mappings alive
     // read penetration bullets
     bool gotPeerBullets = TryReadNatPenetrationBullets();
+    // we have seen peer's udp messages get in via UDP. It then publishes to state store that it sees peer at this session
+    PublishViewToPeer();
 
     switch (_currentState)
     {
@@ -113,8 +115,6 @@ class HandshakeStateMachine
             break;
           }
 
-          // we have seen peer's udp messages get in via UDP. It then publishes to state store that it sees peer at this session
-          PublishViewToPeer();
           _currentState = ProtocolState.SEEN_PEER_STATE;
 
           break;
@@ -265,7 +265,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
 
   // State - Mutable fields 
   private int _registrationRetryCount;
-  private int _sendPunchRetryCount;
+  private int _handshakeRetryCount;
   private IPAddress? _peerIp;
   private string? _peerId;
   private int _peerPort;
@@ -327,7 +327,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
     {
       nextState = await Next();
       _logger?.LogDebug("HolePunching State Transition: {CurrentState} => state {NextState}, retry count {RegistrationRetryCount}, send punch retry count {SendPunchRetryCount}",
-        currentState, nextState, _registrationRetryCount, _sendPunchRetryCount);
+        currentState, nextState, _registrationRetryCount, _handshakeRetryCount);
     }
     while (nextState != HolePunchingState.ESTABLISHED_CONNECTION && nextState != HolePunchingState.INITIAL);
 
@@ -345,7 +345,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
     HolePunchingState currentState = CurrentState;
     await Next(); // Move to Closed state and cleanup
     _logger?.LogDebug("HolePunching State Transition: {CurrentState} => state {NextState}, retry count {RegistrationRetryCount}, send punch retry count {SendPunchRetryCount}",
-      currentState, CurrentState, _registrationRetryCount, _sendPunchRetryCount);
+      currentState, CurrentState, _registrationRetryCount, _handshakeRetryCount);
   }
 
   // Advance the state machine to the next state returning the new state
@@ -360,7 +360,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         Debug.Assert(_peerPort == 0, "Invariant Violation: Will be set once we get peer info from server so currenty should be 0");
         Debug.Assert(_peerEndPoint == null, "Invariant Violation: Will be set once we get peer info from server so currenty should be null");
         Debug.Assert(_registrationRetryCount == 0, "Invariant Violation: Retry count should be 0 in initial state");
-        Debug.Assert(_sendPunchRetryCount == 0, "Invariant Violation: Send punch retry count should be 0 in initial state");
+        Debug.Assert(_handshakeRetryCount == 0, "Invariant Violation: Send punch retry count should be 0 in initial state");
 
         _logger?.LogDebug("HolePunching: Initializing UDP socket and registering with server");
 
@@ -430,7 +430,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         Debug.Assert(_peerPort >= 0, "Invariant Violation: Should have been received from server in previous state RegisteredWithServer");
         Debug.Assert(_peerEndPoint != null, "Invariant Violation: Should have been created in previous state RegisteredWithServer");
 
-        if (_sendPunchRetryCount >= _maxRetryCount)
+        if (_handshakeRetryCount >= _maxRetryCount)
         {
           // Exceeded max retries, mark as failed
           CurrentState = HolePunchingState.CLOSED;
@@ -460,7 +460,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         if (!connected)
         {
           _sessionId++; // increment session id for next attempt
-          _sendPunchRetryCount++;
+          _handshakeRetryCount++;
           // Peer may not have registered yet
           // retry sending punch packet by moving one level back on state where we will reget Peer's info and resend punch packet incase the first was not received
           _peerEndPoint = null!; // reset peer endpoint to force re-creation
@@ -472,7 +472,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         }
 
         // Successfully received response from peer
-        _sendPunchRetryCount = 0;
+        _handshakeRetryCount = 0;
         CurrentState = HolePunchingState.ESTABLISHED_CONNECTION;
         break;
 
@@ -504,7 +504,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
 
 
         _registrationRetryCount = 0;
-        _sendPunchRetryCount = 0;
+        _handshakeRetryCount = 0;
         _peerId = null;
         _peerIp = null;
         _peerPort = 0;
