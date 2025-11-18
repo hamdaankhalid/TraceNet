@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection.Metadata.Ecma335;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
@@ -110,8 +111,11 @@ abstract class SynAckStateMachineBase
     Debug.Assert(readBytes % 2 == 0, "All ctrl packets being sent should be divisible by 2");
     for (int i = 0; i < readBytes; i += 2)
     {
-      recvdState = (SynAckState)_internalRecvBuffer[i];
       byte seq = _internalRecvBuffer[i + 1];
+      if (seq > _lastPeerSeq)
+      {
+        recvdState = (SynAckState)_internalRecvBuffer[i];
+      }
       Debug.Assert(recvdState != SynAckState.Initial, "Nobody sends Initial state packet on the buffer!");
       if (recvdState == SynAckState.Bullet || seq <= _lastPeerSeq || recvdState != expectedState)
       {
@@ -150,7 +154,7 @@ class SynAckStateMachineInitiator : SynAckStateMachineBase
         _currentState = SynAckState.Syn;
         break;
       case SynAckState.Syn:
-        // Wait for SYN-ACK packet
+        // Wait for SYN-ACK packet ONLY Transition to SynAck state on receipt
 
         // expected state from peer => SynAck
         if (!ReadBuffer(SynAckState.SynAck, out SynAckState recvdState, 250) && recvdState == SynAckState.None)
@@ -163,12 +167,13 @@ class SynAckStateMachineInitiator : SynAckStateMachineBase
 
         if (recvdState == SynAckState.SynAck)
         {
+          _logger?.LogDebug("SynAck Initiator: Received SYN-ACK seq={Seq}", _lastPeerSeq);
           _currentState = SynAckState.SynAck;
         }
 
         break;
       case SynAckState.SynAck:
-        // Send ACK packet with sequence number to peer
+        // Send ACK packet with sequence number to peer ALWAYS Transition to ACK state
 
         SendBuffer(SynAckState.Ack);
         _logger?.LogDebug("SynAck Initiator: Sent ACK seq={Seq}", _mySeq);
@@ -183,8 +188,15 @@ class SynAckStateMachineInitiator : SynAckStateMachineBase
 
         if (recvdState1 == SynAckState.SynAck)
         {
-          // New SYN-ACK retransmission - peer didn't get our ACK, resend it Maybe we can reset the satae machine here?
+          // New SYN-ACK retransmission - peer didn't get our ACK
+          _logger?.LogDebug("SynAck Initiator: Received retransmitted SYN-ACK seq={Seq}, New higher sequence means we need to reset the initiator", _lastPeerSeq); 
           _currentState = SynAckState.SynAck;
+          return;
+        }
+
+        if (recvdState1 != SynAckState.None)
+        {
+          _currentState = SynAckState.Syn;
           return;
         }
 
@@ -207,13 +219,14 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
     switch (_currentState)
     {
       case SynAckState.Initial:
+        // Wait for SYN packet ONLY transition to Syn state on receipt
+      
         if (_attemptCount >= MAX_ATTEMPTS)
         {
           _logger?.LogError("SynAck Responder: Exceeded max attempts ({MaxAttempts}) waiting for SYN", MAX_ATTEMPTS);
           throw new TimeoutException($"Failed to receive SYN after {MAX_ATTEMPTS} attempts");
         }
 
-        // Wait for SYN packet
         if (ReadBuffer(SynAckState.Syn, out SynAckState recvdState, 250))
         {
           _currentState = SynAckState.Syn;
@@ -225,12 +238,15 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
 
         break;
       case SynAckState.Syn:
-        // Send SYN-ACK packet with sequence number
+        // Send SYN-ACK and ALWAYS Transition to SynAck state
+      
         SendBuffer(SynAckState.SynAck);
         _logger?.LogDebug("SynAck Responder: Sent SYN-ACK seq={Seq}", _mySeq);
         _currentState = SynAckState.SynAck;
         break;
       case SynAckState.SynAck:
+        // Wait for ACK packet ONLY Transition to Ack state on receipt
+
         if (_attemptCount >= MAX_ATTEMPTS)
         {
           _logger?.LogError("SynAck Responder: Exceeded max attempts ({MaxAttempts}) waiting for ACK", MAX_ATTEMPTS);
@@ -254,20 +270,26 @@ class SynAckStateMachineResponder : SynAckStateMachineBase
         break;
       case SynAckState.Ack:
         // Connection established
-        // Wait briefly for any retransmitted packets and respond appropriately
-        if (!ReadBuffer(SynAckState.None, out SynAckState recvdState2, 1000) && recvdState2 == SynAckState.None)
+        // ONLY Transition to Established state on no further packets received within timeout        
+
+        bool _ = ReadBuffer(SynAckState.None, out SynAckState recvdState2, 1_000); // always returns false here
+
+        if (recvdState2 == SynAckState.SynAck)
         {
-          _currentState = SynAckState.Established;
+          // New SYN-ACK retransmission - peer didn't get our ACK
+          _logger?.LogDebug("SynAck Initiator: Received retransmitted SYN-ACK seq={Seq}, New higher sequence means we need to reset the initiator", _lastPeerSeq); 
+          _currentState = SynAckState.SynAck;
           return;
         }
 
-        if (recvdState2 == SynAckState.Syn)
+        if (recvdState2 != SynAckState.None)
         {
-          // New SYN retransmission - peer still doesn't know we're connected, go back to Syn state
           _currentState = SynAckState.Syn;
           return;
         }
 
+        _logger?.LogDebug("SynAck Initiator: Connection established");
+        _currentState = SynAckState.Established;
         break;
       case SynAckState.Established:
         // Already established, no further state
