@@ -60,7 +60,7 @@ class HandshakeStateMachine
   private readonly string _peerSessionStateStoreKey;
   private readonly EndPoint _peerEndPoint;
   private readonly ILogger? _logger;
-  private readonly byte[] _internalRecvBuffer = new byte[128]; // 1 byte type + 4 bytes sessionId + 1 byte seq = 6 bytes per packet, buffer should hold a multiple of 6
+  private readonly byte[] _internalRecvBuffer = new byte[6 * 20]; // 1 byte type + 4 bytes sessionId + 1 byte seq = 6 bytes per packet, buffer should hold a multiple of 6
   private readonly byte[] _internalSendBuffer = new byte[6]; // 1 byte type + 4 bytes sessionId + 1 byte seq
   private readonly bool _isA;
 
@@ -509,7 +509,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
           while (stateMachine.CurrentState != ProtocolState.ESTABLISHED_CONNECTION)
           {
             stateMachine.Next();
-            await Task.Delay(Random.Shared.Next(100, 150)); // small delay to avoid tight loop
+            await Task.Delay(Random.Shared.Next(100)); // small random delay to avoid tight loops and synchronize better
           }
           connected = true;
         }
