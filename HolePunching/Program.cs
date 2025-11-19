@@ -94,8 +94,8 @@ class HandshakeStateMachine
   {
     PublishViewToPeer();
     // UDP is only kept for hole punching keep-alive bullets, only once the established state is reached should UDP be used for actual data transfer
-    ShootNatPenetrationBullets(2); // 3 bullets per state call to keep NAT mappings alive
     bool gotNewPeerBullets = TryReadNatPenetrationBullets();
+    ShootNatPenetrationBullets(2); // 3 bullets per state call to keep NAT mappings alive
     // read penetration bullets that could have been sent by peer. This will be used to make sure
     bool readPeerView = TryReadPeerView(out int peerSessionId, out int ourSessionIdViewedByPeer);
 
