@@ -92,11 +92,12 @@ class HandshakeStateMachine
   // As long as the state machine is kept active we actually want to keep sending bullets
   public void Next()
   {
-    ShootNatPenetrationBullets(3); // 3 bullets per state call to keep NAT mappings alive
+    ShootNatPenetrationBullets(1); // 3 bullets per state call to keep NAT mappings alive
     PublishViewToPeer();
+    ShootNatPenetrationBullets(1); // 3 bullets per state call to keep NAT mappings alive
     // UDP is only kept for hole punching keep-alive bullets, only once the established state is reached should UDP be used for actual data transfer
     bool gotNewPeerBullets = TryReadNatPenetrationBullets();
-    ShootNatPenetrationBullets(3); // 3 bullets per state call to keep NAT mappings alive
+    ShootNatPenetrationBullets(1); // 3 bullets per state call to keep NAT mappings alive
     // read penetration bullets that could have been sent by peer. This will be used to make sure
     bool readPeerView = TryReadPeerView(out int peerSessionId, out int ourSessionIdViewedByPeer);
 
