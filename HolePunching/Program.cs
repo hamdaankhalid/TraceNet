@@ -155,8 +155,6 @@ class HandshakeStateMachine
 
           _attemptCount++;
           _currentState = ProtocolState.INITIAL;
-          // Drain the remaining bullets to avoid stale packets
-          DrainPenetrationBullets();
           break;
         }
       case ProtocolState.ESTABLISHED_CONNECTION:
@@ -224,15 +222,6 @@ class HandshakeStateMachine
     for (int i = 0; i < numBullets; i++)
     {
       _udpSocket.SendTo(_internalSendBuffer, SocketFlags.None, _peerEndPoint);
-    }
-  }
-
-  private void DrainPenetrationBullets()
-  {
-    while (_udpSocket.Poll(100_000, SelectMode.SelectRead))
-    {
-      EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
-      _udpSocket.ReceiveFrom(_internalRecvBuffer, ref remoteEP);
     }
   }
 
