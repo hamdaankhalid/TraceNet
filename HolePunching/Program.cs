@@ -103,8 +103,12 @@ class HandshakeStateMachine
     ShootNatPenetrationBullets(1);
     // See what peer is saying their LIVE ID over NAT is
     bool gotNewPeerBullets = TryReadNatPenetrationBullets();
+    // Try to send peer our live session info over unreliable channel
+    ShootNatPenetrationBullets(1);
     // reliably tell peer what session Id I see them at and what my session Id is
     PublishViewToPeer();
+    // Try to send peer our live session info over unreliable channel again. If even one reaches them we are good
+    ShootNatPenetrationBullets(1);
     // Check what peer is telling us reliably.
     bool readPeerView = TryReadPeerView(out int peerSessionId, out int ourSessionIdViewedByPeer);
 
