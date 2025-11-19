@@ -94,7 +94,7 @@ class HandshakeStateMachine
   {
     // state machines should use the backing store for reliable delivery of state messages not UDP
     // UDP is only kept for hole punching keep-alive bullets, only once the established state is reached should UDP be used for actual data transfer
-    ShootNatPenetrationBullets(2); // 3 bullets per state call to keep NAT mappings alive
+    ShootNatPenetrationBullets(1); // 3 bullets per state call to keep NAT mappings alive
     // read penetration bullets
     bool gotPeerBullets = TryReadNatPenetrationBullets();
     if (gotPeerBullets)
