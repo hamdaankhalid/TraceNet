@@ -357,6 +357,8 @@ internal class HolePunchingStateMachine : IAsyncDisposable
 
   private bool TimeoutExceeded()
   {
+    _logger?.LogDebug("HolePunching: Checking timeout: StartTimeTicks {StartTimeTicks}, TimeoutDurationTicks {TimeoutDurationTicks}, CurrentTicks {CurrentTicks}",
+      _startTimeStampTicks, _timeoutDurationTicks, DateTimeOffset.UtcNow.Ticks);
     return _startTimeStampTicks + _timeoutDurationTicks > DateTimeOffset.UtcNow.Ticks;
   }
 
