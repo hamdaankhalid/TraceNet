@@ -91,7 +91,7 @@ class HandshakeStateMachine
     _startTimeStampTicks = DateTimeOffset.UtcNow.Ticks;
   }
 
-  // As long as the state machine is kept active we actually want to keep sending bullets
+  // Invariant in Connection State Machine: Either both should fail to connect or both should succeed. We should never have a partial success.
   public void Next()
   {
     if (DateTimeOffset.UtcNow.Ticks >= _startTimeStampTicks + _timeoutTicks)
@@ -99,13 +99,13 @@ class HandshakeStateMachine
       throw new TimeoutException("Max handshake attempts reached without establishing connection.");
     }
   
+    // Hey Peer this is my LIVE ID over NAT
     ShootNatPenetrationBullets(1);
-    PublishViewToPeer();
-    ShootNatPenetrationBullets(1);
-    // UDP is only kept for hole punching keep-alive bullets, only once the established state is reached should UDP be used for actual data transfer
+    // See what peer is saying their LIVE ID over NAT is
     bool gotNewPeerBullets = TryReadNatPenetrationBullets();
-    ShootNatPenetrationBullets(1);
-    // read penetration bullets that could have been sent by peer. This will be used to make sure
+    // reliably tell peer what session Id I see them at and what my session Id is
+    PublishViewToPeer();
+    // Check what peer is telling us reliably.
     bool readPeerView = TryReadPeerView(out int peerSessionId, out int ourSessionIdViewedByPeer);
 
     // we have seen peer's udp messages get in via UDP. It then publishes to state store that it sees peer at this session
@@ -114,9 +114,11 @@ class HandshakeStateMachine
     _logger?.LogDebug("HandshakeStateMachine: Read peer view from state store PeerSessionId: {PeerSessionId}, {PeersViewOfOurSessionId}",
       peerSessionId, ourSessionIdViewedByPeer);
 
+    // if we have a live view ongoing AND peer has also a successful view published from their side we MIGHT be able to connect!
     if (gotNewPeerBullets && readPeerView)
     {
-
+      // if the peer session ID over the reliable channel matches with the live view sent over the UDP channel then we are seeing the reliable view of the same peer who is sending us UDP packets
+      // if they claim to be able to see our latest ID over the reliable channel then we have mutual visibility and can move to established connection
       if (peerSessionId == _peerSessionId && ourSessionIdViewedByPeer == _mySessionId)
       {
         _currentState = ProtocolState.ESTABLISHED_CONNECTION;
