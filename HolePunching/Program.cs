@@ -359,7 +359,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
 
   private bool TimeoutExceeded()
   {
-    return _startTimeStamp + _timeoutTimeStamp >= DateTimeOffset.UtcNow.Ticks;
+    return _startTimeStamp + _timeoutTimeStamp <= DateTimeOffset.UtcNow.Ticks;
   }
 
   public async Task<bool> ConnectAsync(string peerId)
@@ -448,6 +448,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         {
           // Exceeded max retries, mark as failed
           CurrentState = HolePunchingState.CLOSED;
+          _logger?.LogDebug("HolePunching: Exceeded timeout while attempting hole punching synchronization with peer at {PeerEndPoint}", _peerEndPoint);
           break;
         }
 
@@ -487,7 +488,7 @@ internal class HolePunchingStateMachine : IAsyncDisposable
         {
           // Exceeded max retries, mark as failed
           CurrentState = HolePunchingState.CLOSED;
-          _logger?.LogDebug("HolePunching: Exceeded max retries, marking as failed");
+          _logger?.LogDebug("HolePunching: Exceeded timeout while attempting hole punching synchronization with peer at {PeerEndPoint}", _peerEndPoint);
           break;
         }
 
