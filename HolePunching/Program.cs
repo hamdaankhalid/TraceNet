@@ -60,7 +60,7 @@ class HandshakeStateMachine
   private readonly string _peerSessionStateStoreKey;
   private readonly EndPoint _peerEndPoint;
   private readonly ILogger? _logger;
-  private readonly byte[] _internalRecvBuffer = new byte[36]; // 1 byte type + 4 bytes sessionId + 1 byte seq = 6 bytes per packet, buffer holds 6 packets
+  private readonly byte[] _internalRecvBuffer = new byte[6 * 10]; // 1 byte type + 4 bytes sessionId + 1 byte seq = 6 bytes per packet, buffer holds 6 packets
   private readonly byte[] _internalSendBuffer = new byte[6]; // 1 byte type + 4 bytes sessionId + 1 byte seq
   private readonly bool _isA;
 
@@ -92,10 +92,11 @@ class HandshakeStateMachine
   // As long as the state machine is kept active we actually want to keep sending bullets
   public void Next()
   {
+    ShootNatPenetrationBullets(3); // 3 bullets per state call to keep NAT mappings alive
     PublishViewToPeer();
     // UDP is only kept for hole punching keep-alive bullets, only once the established state is reached should UDP be used for actual data transfer
     bool gotNewPeerBullets = TryReadNatPenetrationBullets();
-    ShootNatPenetrationBullets(2); // 3 bullets per state call to keep NAT mappings alive
+    ShootNatPenetrationBullets(3); // 3 bullets per state call to keep NAT mappings alive
     // read penetration bullets that could have been sent by peer. This will be used to make sure
     bool readPeerView = TryReadPeerView(out int peerSessionId, out int ourSessionIdViewedByPeer);
 
